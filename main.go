@@ -72,11 +72,13 @@ func handleConnection(conn io.ReadCloser) <-chan string {
 		defer close(ch)
 		for {
 			n, err := conn.Read(buf)
-			if err != nil {
+			ch <- string(buf[:n])
+			if err == io.EOF {
+				fmt.Println("Connection terminated")
+				break
+			} else if err != nil {
 				panic(fmt.Sprintf("Connection read error %s\n", err.Error()))
 			}
-			fmt.Printf("Read n: %d\n", n)
-			ch <- string(buf[:n])
 		}
 	}()
 
