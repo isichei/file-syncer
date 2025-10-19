@@ -5,71 +5,101 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
-	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
-type CmdFlag string
-
-const (
-	CmdFlagSender   = "sender"
-	CmdFlagReciever = "reciever"
-)
-
-// PHAT BOI
 type CmdArgs struct {
-	reciever   bool
-	port       string
-	textToSend string
+	replica bool
+	port    string
 }
 
-func (c *CmdArgs) Register(flagSet *flag.FlagSet, cmd CmdFlag) {
-	flagSet.StringVar(&c.port, "port", "8080", "What port should the tcp connection be on")
-	if cmd == CmdFlagSender {
-		flagSet.StringVar(&c.textToSend, "text", "", "What text to send over the TCP connection")
+func (c *CmdArgs) Register() {
+	flag.BoolVar(&c.replica, "replica", false, "If this is the main filesystem or replica")
+	flag.StringVar(&c.port, "port", "8080", "What port should the tcp connection be on")
+	flag.Parse()
+}
+
+type Syncer struct {
+	replica bool
+}
+
+func (s *Syncer) Start(conn net.Conn) {
+	buf := make([]byte, 1024)
+	defer conn.Close()
+	if s.replica {
+		fmt.Println("I am the replica")
+		for {
+			// Read the incoming data (main always sends first)
+			// Todo I think I need a reader / handler channel otherwise it just runs and exists before
+			// anything is sent/recieved
+			n, err := conn.Read(buf)
+			if isConnError(err) {
+				break
+			}
+			data := string(buf[:n])
+			slog.Info("replica", "recieved", data)
+
+			// Response
+			response := fmt.Sprintf("recieved %s", data)
+			n, err = conn.Write([]byte(response))
+			if isConnError(err) {
+				break
+			}
+			slog.Info("replica", "sent", response)
+		}
+	} else {
+		fmt.Println("I am the main")
+		for i := range 5 {
+			// main initiates
+			n, err := conn.Write([]byte(strconv.Itoa(i)))
+			slog.Info("main", "sent", i)
+			if isConnError(err) {
+				break
+			}
+
+			// Check recieved
+			n, err = conn.Read(buf)
+			if isConnError(err) {
+				break
+			}
+			response := string(buf[:n])
+			slog.Info("main", "recieved", response)
+			expectedResponse := fmt.Sprintf("recieved %d", i)
+			if expectedResponse != response {
+				errMsg := fmt.Sprintf("Did not get expected response. Wanted: `%s`, Got: `%s`", expectedResponse, response)
+				panic(errMsg)
+			}
+		}
 	}
+}
+
+func isConnError(e error) bool {
+	if e == io.EOF {
+		fmt.Println("Connection terminated")
+		return true
+	} else if e != nil {
+		panic(fmt.Sprintf("Connection read error %s\n", e.Error()))
+	}
+	return false
 }
 
 // Step one, let's send data between a sender and reciever. Should just send shit via TCP.
 func main() {
-	cmdArgs := CmdArgs{reciever: true}
-	recieverCmd := flag.NewFlagSet(CmdFlagReciever, flag.ExitOnError)
-	cmdArgs.Register(recieverCmd, CmdFlagReciever)
-
-	senderCmd := flag.NewFlagSet(CmdFlagSender, flag.ExitOnError)
-	cmdArgs.Register(senderCmd, CmdFlagSender)
-
-	if len(os.Args) < 2 {
-		fmt.Println("expected 'listen' or 'send' subcommands")
-		os.Exit(1)
-	}
-
-	switch os.Args[1] {
-	case CmdFlagReciever:
-		recieverCmd.Parse(os.Args[2:])
-		fmt.Println("Creating tcp connection to recieve...")
-
-	case CmdFlagSender:
-		senderCmd.Parse(os.Args[2:])
-		cmdArgs.reciever = false
-		fmt.Println("Creating tcp connection to send...")
-
-	default:
-		fmt.Printf("expected '%s' or '%s' subcommands\n", CmdFlagSender, CmdFlagReciever)
-		os.Exit(1)
-	}
-
-	conn := createTcpConnection(cmdArgs.port, cmdArgs.reciever)
-	if cmdArgs.reciever {
-		for msg := range handleConnection(conn) {
-			fmt.Println(msg)
-		}
+	cmdArgs := CmdArgs{}
+	cmdArgs.Register()
+	if cmdArgs.replica {
+		fmt.Printf("Running as Replica sender on %s\n", cmdArgs.port)
 	} else {
-		sendData(conn, cmdArgs.textToSend)
+		fmt.Printf("Running as Main sender on %s\n", cmdArgs.port)
 	}
+	conn := createTcpConnection(cmdArgs.port, cmdArgs.replica)
+	syncer := Syncer{cmdArgs.replica}
+	syncer.Start(conn)
 }
 
 func createTcpConnection(port string, listener bool) net.Conn {
@@ -90,23 +120,23 @@ func createTcpConnection(port string, listener bool) net.Conn {
 	} else {
 		for retry := range 4 {
 			conn, err = net.Dial("tcp", port)
-			
+
 			// Done
 			if err == nil {
 				break
 			}
-			
-			// Every other error 
+
+			// Every other error
 			if !errors.Is(err, syscall.ECONNREFUSED) {
 				panic(err)
 			}
 
-			// Failed to connect 	
+			// Failed to connect
 			if retry == 3 {
 				panic(errors.Join(errors.New("Retried connection 3 times but failed"), err))
 			}
-			
-			// Retry connection 
+
+			// Retry connection
 			fmt.Println("Retrying...")
 			time.Sleep(time.Second)
 		}
