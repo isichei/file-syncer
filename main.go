@@ -97,9 +97,22 @@ func main() {
 	} else {
 		fmt.Printf("Running as Main sender on %s\n", cmdArgs.port)
 	}
-	conn := createTcpConnection(cmdArgs.port, cmdArgs.replica)
-	syncer := Syncer{cmdArgs.replica}
-	syncer.Start(conn)
+	
+	fileCache := map[string]fileCacheData{}
+
+	ch := make(chan fileDetails)
+	go getFileDetails("files_folder", ch)
+	
+	for fd := range ch {
+		fmt.Printf("%v\n", fd)
+		fileCache[fd.name] = fileCacheData{md5: fd.md5, synced: false}
+	}
+
+	fmt.Printf("%v\n", fileCache)
+	
+	// conn := createTcpConnection(cmdArgs.port, cmdArgs.replica)
+	// syncer := Syncer{cmdArgs.replica}
+	// syncer.Start(conn)
 }
 
 func createTcpConnection(port string, listener bool) net.Conn {
