@@ -1,0 +1,103 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+)
+
+type MsgType byte
+
+const (
+	MsgTypeCheck     MsgType = 'C'
+	MsgTypeMatch     MsgType = 'M'
+	MsgTypeData      MsgType = 'D'
+	MsgTypeFinish    MsgType = 'F'
+	MsgTypeUndefined MsgType = 'U'
+)
+
+// Phat struct
+type Message struct {
+	Type     MsgType
+	FileName string
+	Data     []byte
+	MD5      string
+	Match    bool
+}
+
+func (msg *Message) AsBytesBuf() []byte {
+	buf := []byte{}
+
+	switch msg.Type {
+	case MsgTypeFinish:
+		buf = fmt.Appendf(buf, "%c:,\x00", msg.Type)
+
+	case MsgTypeCheck:
+		buf = fmt.Appendf(buf, "%c:%s,%s\x00", msg.Type, msg.FileName, msg.MD5)
+
+	case MsgTypeMatch:
+		match := 0
+		if msg.Match {
+			match = 1
+		}
+
+		buf = fmt.Appendf(buf, "%c:%s,%s\x00", msg.Type, msg.FileName, match)
+
+	case MsgTypeData:
+		buf = fmt.Appendf(buf, "%c:%s,", msg.Type, msg.FileName)
+		buf = append(buf, msg.Data...)
+		buf = append(buf, '\x00')
+
+	case MsgTypeUndefined:
+		panic("Got undefined Msg type when trying to create msg buf")
+	}
+	return buf
+}
+
+// parse the format `<MsgType>:<r-filepath>,{...}\n`
+// {...} Is then the relevant data depending on the MsgType
+func ParseMessage(msgStream []byte) (Message, error) {
+
+	msg := Message{Type: MsgTypeUndefined}
+
+	// Smallest msg is: "F:,\x00"
+	if len(msgStream) < 4 {
+		return msg, errors.New("Message too short")
+	}
+
+	split := bytes.SplitAfterN(msgStream[2:], []byte(","), 2)
+	msg.FileName = string(split[0][:len(split[0])-1])
+
+	if !bytes.HasSuffix(split[1], []byte("\x00")) {
+		return msg, errors.New("Msg does not end in expected null byte")
+	}
+
+	switch MsgType(msgStream[0]) {
+	case MsgTypeFinish:
+		msg.Type = MsgTypeFinish
+
+	case MsgTypeCheck:
+		msg.Type = MsgTypeCheck
+		msg.MD5 = string(split[1][:len(split[1])-1])
+
+	case MsgTypeMatch:
+		msg.Type = MsgTypeMatch
+		// Only exect one value after filename in format
+		switch split[1][0] {
+		case '0':
+			msg.Match = false
+		case '1':
+			msg.Match = true
+		default:
+			return msg, errors.New("Expected 1 or 0 on MsgCheck response")
+		}
+
+	case MsgTypeData:
+		msg.Type = MsgTypeData
+		msg.Data = append(msg.Data, split[1][:len(split[1])-1]...)
+
+	default:
+		return msg, errors.New("Could not parse error bad starting value in msg")
+	}
+	return msg, nil
+}
