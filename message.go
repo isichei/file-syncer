@@ -36,12 +36,12 @@ func (msg *Message) AsBytesBuf() []byte {
 		buf = fmt.Appendf(buf, "%c:%s,%s\x00", msg.Type, msg.FileName, msg.MD5)
 
 	case MsgTypeMatch:
-		match := 0
+		matchValue := 0
 		if msg.Match {
-			match = 1
+			matchValue = 1
 		}
 
-		buf = fmt.Appendf(buf, "%c:%s,%s\x00", msg.Type, msg.FileName, match)
+		buf = fmt.Appendf(buf, "%c:%s,%d\x00", msg.Type, msg.FileName, matchValue)
 
 	case MsgTypeData:
 		buf = fmt.Appendf(buf, "%c:%s,", msg.Type, msg.FileName)
@@ -89,7 +89,7 @@ func ParseMessage(msgStream []byte) (Message, error) {
 		case '1':
 			msg.Match = true
 		default:
-			return msg, errors.New("Expected 1 or 0 on MsgCheck response")
+			return msg, fmt.Errorf("Expected 1 or 0 on MsgCheck response. Got: %c. Full byte slice %s.", split[1][0], string(split[1]))
 		}
 
 	case MsgTypeData:
