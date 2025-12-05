@@ -1,81 +1,163 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	// "log/slog"
+	"log/slog"
 	"net"
-	// "strconv"
+	"os"
+	"path"
 	"strings"
 	"syscall"
 	"time"
 )
 
-type MsgType byte
-
-const (
-	MsgTypeCheck     MsgType = 'C'
-	MsgTypeMatch     MsgType = 'M'
-	MsgTypeData      MsgType = 'D'
-	MsgTypeUndefined MsgType = 'U'
-)
-
-// Phat struct
-type Message struct {
-	Type     MsgType
-	FileName string
-	Data     []byte
-	MD5      string
-	Match    bool
-}
-
 type CmdArgs struct {
-	replica bool
-	port    string
+	replica   bool
+	port      string
+	directory string
 }
 
 func (c *CmdArgs) Register() {
 	flag.BoolVar(&c.replica, "replica", false, "If this is the main filesystem or replica")
 	flag.StringVar(&c.port, "port", "8080", "What port should the tcp connection be on")
+	flag.StringVar(&c.directory, "directory", "test_data", "Path to the dir to sync the files to")
 	flag.Parse()
+
+	slog.Debug("CmdArgs.Register", "replica", c.replica, "port", c.port, "directory", c.directory)
 }
 
 type Syncer struct {
-	replica   bool
-	conn      net.Conn
-	directory string
+	replica bool
+	conn    io.ReadWriteCloser
+	fc      *fileCache
+}
+
+func (s *Syncer) SendMessage(msg Message) error {
+	msgBuf := msg.AsBytesBuf()
+	totalWritten := 0
+	for totalWritten < len(msgBuf) {
+		n, err := s.conn.Write(msgBuf[totalWritten:])
+		if err != nil {
+			return errors.Join(err, fmt.Errorf("Could not send msg data to tcp connection"))
+		}
+		totalWritten += n
+	}
+	return nil
+}
+
+// Send finish msg from main
+func (s *Syncer) SendFinish() error {
+	msg := Message{Type: MsgTypeFinish}
+	err := s.SendMessage(msg)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Syncer) RunAsMain() {
-	// TODO use struct values
 	defer s.conn.Close()
-	fc := createFileCache(s.directory)
+	reader := bufio.NewReader(s.conn)
 
-	for fileName, fcData := range fc.data {
-		match := CheckFile(s.conn, fileName, fcData.md5)
+	for fileName, fcData := range s.fc.data {
+		// Send out msg to reciver to replica 
+		checkMsg := Message{Type: MsgTypeCheck, FileName: fileName, MD5: fcData.md5}
+		_, err := s.conn.Write(checkMsg.AsBytesBuf())  // I am going to assume the msg is so small I don't need to check n
+		if err != nil {
+			panic(fmt.Sprintf("Could not send message for fileCheck %s\n", fileName))
+		}
 
-		if !match {
-			// Todo make go routine and add wg to see if speed up
+		// Check response from replica then send if non matching
+		msgStream, err := reader.ReadBytes('\x00')
+		if err != nil {
+			panic("Could not read incomming data from replica on check request")
+		}
+		msg, err := ParseMessage(msgStream)
+		if err != nil {
+			panic(fmt.Sprintf("Could parse message from msg stream from replica on check request - %s", err))
+		}
+		if msg.Type != MsgTypeMatch {
+			panic("Unexpected msg type from replica on check request")
+		}
+		if !msg.Match {
 			s.SendFile(fileName)
+		}
+	}
+
+	s.SendFinish()
+}
+
+func (s *Syncer) RunAsReplica() {
+	defer s.conn.Close()
+
+	reader := bufio.NewReader(s.conn)
+	
+	// Not sure how I feel about labels...
+	OUTER:
+	for {
+		msgStream, err := reader.ReadBytes('\x00')
+		if err != nil {
+			panic("Could not read incomming data")
+		}
+
+		msg, err := ParseMessage(msgStream)
+		if err != nil {
+			panic("Could parse message from msg stream")
+		}
+
+		switch msg.Type {
+		case MsgTypeFinish:
+			break OUTER
+
+		case MsgTypeCheck:
+			responseMessage := Message{Type: MsgTypeMatch, FileName: msg.FileName}
+			fileData, ok := s.fc.data[msg.FileName]
+			responseMessage.Match = !ok || fileData.md5 != msg.MD5
+			respErr := s.SendMessage(responseMessage)
+			if respErr != nil {
+				panic("Failed to send the response message for the md5 file check")
+			}
+
+		case MsgTypeMatch:
+			panic("I am the replica I shouldn't be being sent Match messages!")
+
+		case MsgTypeData:
+			s.WriteFile(msg)
+
+		default:
+			panic(fmt.Sprintf("For loop recieving msgs over tcp based on msg type got an unknown message type: %c", msg.Type))
 		}
 	}
 }
 
-func (s *Syncer) RunAsReplica() {
-	// TODO use struct values
-	defer s.conn.Close()
-	panic("Not yet implemented")
-}
-
-// TODO
+// Reads the file and then sends it over tcp using the Message format
 func (s *Syncer) SendFile(filename string) error {
+	var err error
+	msg := Message{Type: MsgTypeData, FileName: filename}
+	msg.Data, err = os.ReadFile(path.Join(s.fc.directory, filename))
+	if err != nil {
+		return errors.Join(err, fmt.Errorf("Could not read file %s", filename))
+	}
+
+	msgDataStream := msg.AsBytesBuf()
+	totalWritten := 0
+	for totalWritten < len(msgDataStream) {
+		n, err := s.conn.Write(msgDataStream[totalWritten:])
+		if err != nil {
+			return errors.Join(err, fmt.Errorf("Could not write data to tcp connection"))
+		}
+		totalWritten += n
+	}
 	return nil
 }
 
 // Sends check msg and awaits a reply for reciever
+// TODO Need to change this to send a Message, requires a re-read. I got the Replica interfaces / methods
+// good at this point. So just need to align the Main entrypoint method to match the same style
 func CheckFile(conn net.Conn, fileName string, md5 string) bool {
 	buf := make([]byte, 128)
 
@@ -99,119 +181,38 @@ func CheckFile(conn net.Conn, fileName string, md5 string) bool {
 	return message.Match
 }
 
-// parse the format `<MsgType>:<r-filepath>,{...}\n`
-// {...} Is then the relevant data depending on the MsgType
-func ParseMessage(msgStream []byte) (Message, error) {
-	msg := Message{Type: MsgTypeUndefined}
-	if len(msgStream) < 4 {
-		return msg, errors.New("Message too short")
+func (s *Syncer) WriteFile(msg Message) error {
+	if msg.Type != MsgTypeData {
+		panic("Trying to write a message that is not a 'D' type msg")
 	}
-	split := bytes.SplitAfterN(msgStream[2:], []byte(","), 2)
-	msg.FileName = string(split[0][:len(split[0])-1])
-
-	if !bytes.HasSuffix(split[1], []byte("\x00")) {
-		return msg, errors.New("Msg does not end in expected null byte")
+	if len(msg.Data) == 0 {
+		panic("Data message has no data")
 	}
 
-	switch MsgType(msgStream[0]) {
-	case MsgTypeCheck:
-		msg.Type = MsgTypeCheck
-		msg.MD5 = string(split[1][:len(split[1])-1])
-
-	case MsgTypeMatch:
-		msg.Type = MsgTypeMatch
-		// Only exect one value after filename in format
-		switch split[1][0] {
-		case '0':
-			msg.Match = false
-		case '1':
-			msg.Match = true
-		default:
-			return msg, errors.New("Expected 1 or 0 on MsgCheck response")
-		}
-
-	case MsgTypeData:
-		msg.Type = MsgTypeData
-		msg.Data = append(msg.Data, split[1][:len(split[1])-1]...)
-
-	default:
-		return msg, errors.New("Could not parse error bad starting value in msg")
+	err := os.WriteFile(path.Join(s.fc.directory, msg.FileName), msg.Data, 0644)
+	if err != nil {
+		return errors.Join(fmt.Errorf("Failed to write %s from msg", msg.FileName), err)
 	}
-	return msg, nil
-}
-
-// TODO
-func RunSyncAsReplica() {}
-
-// Q: Maps copy or pass by ref
-// func (s *Syncer) Run(conn net.Conn) {
-// 	buf := make([]byte, 1024)
-// 	defer conn.Close()
-// 	fc := createFileCache()
-//
-// 	if s.replica {
-// 		fmt.Println("I am the replica")
-// 		for {
-// 			// Read the incoming data (main always sends first)
-// 			// Todo I think I need a reader / handler channel otherwise it just runs and exists before
-// 			// anything is sent/recieved
-// 			n, err := conn.Read(buf)
-// 			if isConnError(err) {
-// 				break
-// 			}
-// 			data := string(buf[:n])
-// 			slog.Info("replica", "recieved", data)
-//
-// 			// Response
-// 			response := fmt.Sprintf("recieved %s", data)
-// 			n, err = conn.Write([]byte(response))
-// 			if isConnError(err) {
-// 				break
-// 			}
-// 			slog.Info("replica", "sent", response)
-// 		}
-// 	} else {
-// 		fmt.Println("I am the main")
-// 		for i := range 5 {
-// 			// main initiates
-// 			n, err := conn.Write([]byte(strconv.Itoa(i)))
-// 			slog.Info("main", "sent", i)
-// 			if isConnError(err) {
-// 				break
-// 			}
-//
-// 			// Check recieved
-// 			n, err = conn.Read(buf)
-// 			if isConnError(err) {
-// 				break
-// 			}
-// 			response := string(buf[:n])
-// 			slog.Info("main", "recieved", response)
-// 			expectedResponse := fmt.Sprintf("recieved %d", i)
-// 			if expectedResponse != response {
-// 				errMsg := fmt.Sprintf("Did not get expected response. Wanted: `%s`, Got: `%s`", expectedResponse, response)
-// 				panic(errMsg)
-// 			}
-// 		}
-// 	}
-// }
-
-func isConnError(e error) bool {
-	if e == io.EOF {
-		fmt.Println("Connection terminated")
-		return true
-	} else if e != nil {
-		panic(fmt.Sprintf("Connection read error %s\n", e.Error()))
-	}
-	return false
+	return nil
 }
 
 // Step one, let's send data between a sender and reciever. Should just send shit via TCP.
 func main() {
 	cmdArgs := CmdArgs{}
 	cmdArgs.Register()
-	tcpConn := createTcpConnection(cmdArgs.port, cmdArgs.replica)
-	syncer := Syncer{replica: cmdArgs.replica, conn: tcpConn, directory: "test_data/"}
+
+	connChannel := make(chan net.Conn)
+	fcChannel := make(chan *fileCache)
+
+	go func() {
+		connChannel <- createTcpConnection(cmdArgs.port, cmdArgs.replica)
+	}()
+
+	go func() {
+		fcChannel <- createFileCache(cmdArgs.directory)
+	}()
+
+	syncer := Syncer{replica: cmdArgs.replica, conn: <-connChannel, fc: <-fcChannel}
 	if cmdArgs.replica {
 		fmt.Printf("Running as Replica sender on %s\n", cmdArgs.port)
 		syncer.RunAsReplica()
@@ -219,46 +220,6 @@ func main() {
 		fmt.Printf("Running as Main sender on %s\n", cmdArgs.port)
 		syncer.RunAsMain()
 	}
-	// fileCache := map[string]fileCacheData{}
-	//
-	// ch := make(chan fileDetails)
-	//
-	// go getFileDetails("files_folder", ch)
-	//
-	// for fd := range ch {
-	// 	fmt.Printf("%v\n", fd)
-	// 	tcpConn.CheckFileMatches(fd.name, fcd.md5)
-	// 	if err != nil {
-	// 		panic(fmt.Sprintf("Could not check %s. Got error %s", fd.name, e))
-	// 	}
-	// 	if !isMatch {
-	// 		go tcpConn.SendFile(fd.name, fcd.md5, wg)
-	// 	}
-	// }
-	//
-	// fmt.Printf("%v\n", fileCache)
-	//
-	// tcpConn := createTcpConnection(cmdArgs.port, cmdArgs.replica)
-	// for fileName, fcd := range fileCache {
-	// 	resp, err := tcpConn.CheckFile(fileName, fcd.md5)
-	// 	if err != nil {
-	// 		panic(fmt.Sprintf("Bad msg %s", e))
-	// 	}
-	// 	switch resp {
-	// 		case true:
-	// 			go tcpConn.SendFile(fileName)
-	// 		case false:
-	// 	}
-	// }
-	//
-	// // syncer := Syncer{cmdArgs.replica}
-	// for msg := range syncer.Start(conn) {
-	// 	switch parseSyncerMsg(msg) {
-	// 	case: # ERROR
-	// 	default:
-	// 		panic("Unknown Msg")
-	// 	}
-	// }
 }
 
 func createTcpConnection(port string, listener bool) net.Conn {
@@ -271,8 +232,7 @@ func createTcpConnection(port string, listener bool) net.Conn {
 	if listener {
 		ln, err := net.Listen("tcp", port)
 		if err != nil {
-			// handle error
-			panic(err) // Done!
+			panic(err)
 		}
 		conn, err = ln.Accept()
 
@@ -309,39 +269,3 @@ func createTcpConnection(port string, listener bool) net.Conn {
 	return conn
 }
 
-func sendData(conn net.Conn, data string) {
-	defer conn.Close()
-	bytesData := []byte(data)
-	length := len(bytesData)
-	for {
-		n, err := conn.Write(bytesData)
-		if err != nil {
-			panic(fmt.Sprintf("Could not write data to tcp connection: %s\n", err.Error()))
-		}
-		if n == length {
-			break
-		}
-	}
-}
-
-func handleConnection(conn io.ReadCloser) <-chan string {
-	buf := make([]byte, 1024)
-	ch := make(chan string)
-
-	go func() {
-		defer conn.Close()
-		defer close(ch)
-		for {
-			n, err := conn.Read(buf)
-			ch <- string(buf[:n])
-			if err == io.EOF {
-				fmt.Println("Connection terminated")
-				break
-			} else if err != nil {
-				panic(fmt.Sprintf("Connection read error %s\n", err.Error()))
-			}
-		}
-	}()
-
-	return ch
-}

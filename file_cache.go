@@ -27,7 +27,7 @@ type fileDetails struct {
 }
 
 // Returns a filecached with files scanned
-func createFileCache(directory string) fileCache {
+func createFileCache(directory string) *fileCache {
 	fc := fileCache{directory: directory, data: map[string]fileCacheData{}}
 
 	c, err := os.ReadDir(directory)
@@ -55,7 +55,7 @@ func createFileCache(directory string) fileCache {
 		fc.data[entry.Name()] = fileCacheData{md5: hash, synced: false}
 		f.Close()
 	}
-	return fc
+	return &fc
 }
 
 // Iterates through a directory sending back fileDetails into the channel until it is funished
