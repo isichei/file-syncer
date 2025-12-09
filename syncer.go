@@ -113,19 +113,44 @@ OUTER:
 				panic("Failed to send the response message for the md5 file check")
 			}
 
+			// Update the file cache
+			if responseMessage.Match {
+				fileData.synced = true
+				s.fc.data[msg.FileName] = fileData
+			}
+
 		case MsgTypeMatch:
 			panic("I am the replica I shouldn't be being sent Match messages!")
 
 		case MsgTypeData:
 			slog.Debug("Replica received data message", "type", string(msg.Type), "filename", msg.FileName, "dataSize", len(msg.Data))
 			s.WriteFile(msg)
+			fileData, ok := s.fc.data[msg.FileName]
+			if ok {
+				fileData.synced = true
+				s.fc.data[msg.FileName] = fileData
+			} else {
+				// Not the best idea to just set md5 to empty but only using it for final check on synced so ok for now
+				s.fc.data[msg.FileName] = fileCacheData{md5: "", synced: true}
+			}
 
 		default:
 			panic(fmt.Sprintf("For loop recieving msgs over tcp based on msg type got an unknown message type: %c", msg.Type))
 		}
 	}
 
-	// TODO remove all un recieved files from the cache
+	// remove all un-recieved files from the cache (aka not synced)
+	for k, v := range s.fc.data {
+		if !v.synced {
+			fileToDelete := path.Join(s.fc.directory, k)
+			err := os.Remove(fileToDelete)
+			if err != nil {
+				panic(fmt.Sprintf("Could not delete %s. Error: %s", fileToDelete, err))
+			} else {
+				slog.Debug("Replica deleting file", "filename", k)
+			}
+		}
+	}
 }
 
 // Reads the file and then sends it over tcp using the Message format
