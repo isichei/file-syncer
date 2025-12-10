@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -22,12 +23,12 @@ type fileCacheData struct {
 }
 
 // Returns a filecached with files scanned
-func createFileCache(directory string) *fileCache {
+func createFileCache(directory string) (*fileCache, error) {
 	fc := fileCache{directory: directory, data: map[string]fileCacheData{}}
 
 	c, err := os.ReadDir(directory)
 	if err != nil {
-		panic(errors.Join(errors.New("Failed to open directory"), err))
+		return nil, errors.Join(errors.New("Failed to open directory"), err)
 	}
 
 	for _, entry := range c {
@@ -38,17 +39,19 @@ func createFileCache(directory string) *fileCache {
 		f, err := os.Open(filepath.Join(directory, entry.Name()))
 		if err != nil {
 			slog.Error("Failed to open file", "error", err)
-			panic("File go boom") // TODO
+			return nil, fmt.Errorf("Failed to open file %s: %w", entry.Name(), err)
 		}
 
 		h := md5.New()
 		if _, err := io.Copy(h, f); err != nil {
 			slog.Error("Failed to hash file", "error", err)
+			f.Close()
+			return nil, fmt.Errorf("Failed to hash file %s: %w", entry.Name(), err)
 		}
 
 		hash := hex.EncodeToString(h.Sum(nil))
 		fc.data[entry.Name()] = fileCacheData{md5: hash, synced: false}
 		f.Close()
 	}
-	return &fc
+	return &fc, nil
 }

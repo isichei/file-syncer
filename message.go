@@ -49,7 +49,8 @@ func (msg *Message) AsBytesBuf() []byte {
 		buf = append(buf, '\x00')
 
 	case MsgTypeUndefined:
-		panic("Got undefined Msg type when trying to create msg buf")
+		// Leaving this panic here like an assert
+		panic("Got undefined Msg type when trying to create msg buf. This shouldn't happen.")
 	}
 	return buf
 }

@@ -40,7 +40,7 @@ func (s *Syncer) SendFinish() error {
 	return nil
 }
 
-func (s *Syncer) RunAsMain() {
+func (s *Syncer) RunAsMain() error {
 	defer s.conn.Close()
 	reader := bufio.NewReader(s.conn)
 
@@ -51,35 +51,44 @@ func (s *Syncer) RunAsMain() {
 		slog.Debug("Main check message sent", "type", string(checkMsg.Type), "filename", checkMsg.FileName, "md5", checkMsg.MD5)
 
 		if err != nil {
-			panic(fmt.Sprintf("Could not send message for fileCheck %s\n", fileName))
+			slog.Error("Could not send message for fileCheck", "filename", fileName, "error", err)
+			return fmt.Errorf("failed to send check message for file %s: %w", fileName, err)
 		}
 
 		// Check response from replica then send if non matching
 		msgStream, err := reader.ReadBytes('\x00')
 		if err != nil {
-			panic("Could not read incomming data from replica on check request")
+			slog.Error("Could not read incomming data from replica on check request", "error", err)
+			return fmt.Errorf("failed to read response from replica: %w", err)
 		}
 		msg, err := ParseMessage(msgStream)
 		if err != nil {
-			panic(fmt.Sprintf("Could parse message from msg stream from replica on check request - %s", err))
+			slog.Error("Could not parse message from msg stream from replica on check request", "error", err)
+			return fmt.Errorf("failed to parse message from replica: %w", err)
 		}
 		slog.Debug("Main received match message", "type", string(msg.Type), "filename", msg.FileName, "match", msg.Match)
 		if msg.Type != MsgTypeMatch {
-			panic("Unexpected msg type from replica on check request")
+			slog.Error("Unexpected msg type from replica on check request", "expected", string(MsgTypeMatch), "got", string(msg.Type))
+			return fmt.Errorf("unexpected message type from replica: expected %c, got %c", MsgTypeMatch, msg.Type)
 		}
 		if !msg.Match {
-			s.SendFile(fileName)
+			if err := s.SendFile(fileName); err != nil {
+				slog.Error("Failed to send file", "filename", fileName, "error", err)
+				return err
+			}
 		}
 	}
 
 	err := s.SendFinish()
 	if err != nil {
-		panic("Failed to send finish msg")
+		slog.Error("Failed to send finish msg", "error", err)
+		return fmt.Errorf("failed to send finish message: %w", err)
 	}
 	slog.Debug("Main sent finish message", "type", string(MsgTypeFinish))
+	return nil
 }
 
-func (s *Syncer) RunAsReplica() {
+func (s *Syncer) RunAsReplica() error {
 	defer s.conn.Close()
 
 	reader := bufio.NewReader(s.conn)
@@ -89,12 +98,14 @@ OUTER:
 	for {
 		msgStream, err := reader.ReadBytes('\x00')
 		if err != nil {
-			panic("Could not read incomming data")
+			slog.Error("Replica could not read incomming data", "error", err)
+			return fmt.Errorf("failed to read message from main: %w", err)
 		}
 
 		msg, err := ParseMessage(msgStream)
 		if err != nil {
-			panic("Could parse message from msg stream")
+			slog.Error("Replica could not parse message from msg stream", "error", err)
+			return fmt.Errorf("failed to parse message from main: %w", err)
 		}
 
 		switch msg.Type {
@@ -110,7 +121,8 @@ OUTER:
 			respErr := s.SendMessage(responseMessage)
 			slog.Debug("Replica sent match message", "type", string(responseMessage.Type), "filename", responseMessage.FileName, "match", responseMessage.Match)
 			if respErr != nil {
-				panic("Failed to send the response message for the md5 file check")
+				slog.Error("Replica failed to send the response message for the md5 file check", "filename", msg.FileName, "error", respErr)
+				return fmt.Errorf("Failed to send match response for file %s: %w", msg.FileName, respErr)
 			}
 
 			// Update the file cache
@@ -120,11 +132,15 @@ OUTER:
 			}
 
 		case MsgTypeMatch:
-			panic("I am the replica I shouldn't be being sent Match messages!")
+			slog.Error("Replica received unexpected Match message type", "type", string(msg.Type))
+			return fmt.Errorf("Replica should not receive Match messages")
 
 		case MsgTypeData:
 			slog.Debug("Replica received data message", "type", string(msg.Type), "filename", msg.FileName, "dataSize", len(msg.Data))
-			s.WriteFile(msg)
+			if err := s.WriteFile(msg); err != nil {
+				slog.Error("Failed to write file", "filename", msg.FileName, "error", err)
+				return err
+			}
 			fileData, ok := s.fc.data[msg.FileName]
 			if ok {
 				fileData.synced = true
@@ -135,7 +151,8 @@ OUTER:
 			}
 
 		default:
-			panic(fmt.Sprintf("For loop recieving msgs over tcp based on msg type got an unknown message type: %c", msg.Type))
+			slog.Error("Replica received unknown message type", "type", string(msg.Type))
+			return fmt.Errorf("Replica got unknown message type: %c", msg.Type)
 		}
 	}
 
@@ -145,12 +162,14 @@ OUTER:
 			fileToDelete := path.Join(s.fc.directory, k)
 			err := os.Remove(fileToDelete)
 			if err != nil {
-				panic(fmt.Sprintf("Could not delete %s. Error: %s", fileToDelete, err))
+				slog.Error("Replica could not delete file", "filename", k, "path", fileToDelete, "error", err)
+				return fmt.Errorf("Replica failed to delete file %s: %w", fileToDelete, err)
 			} else {
 				slog.Debug("Replica deleting file", "filename", k)
 			}
 		}
 	}
+	return nil
 }
 
 // Reads the file and then sends it over tcp using the Message format
@@ -177,15 +196,17 @@ func (s *Syncer) SendFile(filename string) error {
 
 func (s *Syncer) WriteFile(msg Message) error {
 	if msg.Type != MsgTypeData {
-		panic("Trying to write a message that is not a 'D' type msg")
+		slog.Error("Trying to write a message that is not a 'D' type msg", "type", string(msg.Type))
+		return fmt.Errorf("invalid message type for WriteFile: expected %c, got %c", MsgTypeData, msg.Type)
 	}
 	if len(msg.Data) == 0 {
-		panic("Data message has no data")
+		slog.Error("Data message has no data", "filename", msg.FileName)
+		return fmt.Errorf("data message has no data for file %s", msg.FileName)
 	}
 
 	err := os.WriteFile(path.Join(s.fc.directory, msg.FileName), msg.Data, 0644)
 	if err != nil {
-		return errors.Join(fmt.Errorf("Failed to write %s from msg", msg.FileName), err)
+		return errors.Join(fmt.Errorf("failed to write %s from msg", msg.FileName), err)
 	}
 	return nil
 }

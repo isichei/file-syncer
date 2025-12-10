@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"golang.org/x/sync/errgroup"
 	"log/slog"
 	"net"
 	"os"
@@ -32,7 +33,7 @@ func (c *CmdArgs) Register() {
 	slog.Debug("CmdArgs.Register", "replica", c.replica, "port", c.port, "directory", c.directory)
 }
 
-func createTcpConnection(port string, listener bool) net.Conn {
+func createTcpConnection(port string, listener bool) (net.Conn, error) {
 	var conn net.Conn
 	var err error
 
@@ -42,10 +43,12 @@ func createTcpConnection(port string, listener bool) net.Conn {
 	if listener {
 		ln, err := net.Listen("tcp", port)
 		if err != nil {
-			panic(err)
+			return nil, fmt.Errorf("Failed to listen on %s: %w", port, err)
 		}
 		conn, err = ln.Accept()
-
+		if err != nil {
+			return nil, fmt.Errorf("Failed to accept connection: %w", err)
+		}
 	} else {
 		for retry := range 4 {
 			conn, err = net.Dial("tcp", port)
@@ -57,12 +60,12 @@ func createTcpConnection(port string, listener bool) net.Conn {
 
 			// Every other error
 			if !errors.Is(err, syscall.ECONNREFUSED) {
-				panic(err)
+				return nil, fmt.Errorf("Failed to dial %s: %w", port, err)
 			}
 
 			// Failed to connect
 			if retry == 3 {
-				panic(errors.Join(errors.New("Retried connection 3 times but failed"), err))
+				return nil, errors.Join(errors.New("Retried connection 3 times but failed"), err)
 			}
 
 			// Retry connection
@@ -76,30 +79,47 @@ func createTcpConnection(port string, listener bool) net.Conn {
 	} else {
 		fmt.Printf("TCP Sending on %s babs!\n", port)
 	}
-	return conn
+	return conn, nil
 }
 
 func main() {
 	cmdArgs := CmdArgs{}
 	cmdArgs.Register()
+	var g errgroup.Group
+	var conn net.Conn
+	var fc *fileCache
 
-	connChannel := make(chan net.Conn)
-	fcChannel := make(chan *fileCache)
+	// Set off TCP Connection
+	g.Go(func() error {
+		var err error
+		conn, err = createTcpConnection(cmdArgs.port, cmdArgs.replica)
+		return err
+	})
 
-	go func() {
-		connChannel <- createTcpConnection(cmdArgs.port, cmdArgs.replica)
-	}()
+	// Set of file cache creation
+	g.Go(func() error {
+		var err error
+		fc, err = createFileCache(cmdArgs.directory)
+		return err
+	})
 
-	go func() {
-		fcChannel <- createFileCache(cmdArgs.directory)
-	}()
+	if err := g.Wait(); err != nil {
+		slog.Error("Setup for TCP or File cache failed", "error", err)
+		os.Exit(1)
+	}
 
-	syncer := Syncer{replica: cmdArgs.replica, conn: <-connChannel, fc: <-fcChannel}
+	syncer := Syncer{replica: cmdArgs.replica, conn: conn, fc: fc}
 	if cmdArgs.replica {
-		fmt.Printf("Running as Replica sender on %s\n", cmdArgs.port)
-		syncer.RunAsReplica()
+		slog.Info("Running sender as Replica", "port", cmdArgs.port)
+		if err := syncer.RunAsReplica(); err != nil {
+			slog.Error("RunAsReplica failed", "error", err)
+			os.Exit(1)
+		}
 	} else {
-		fmt.Printf("Running as Main sender on %s\n", cmdArgs.port)
-		syncer.RunAsMain()
+		slog.Info("Running sender as Main", "port", cmdArgs.port)
+		if err := syncer.RunAsMain(); err != nil {
+			slog.Error("RunAsMain failed", "error", err)
+			os.Exit(1)
+		}
 	}
 }
