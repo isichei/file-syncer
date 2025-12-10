@@ -1,4 +1,4 @@
-package main
+package filesyncer
 
 import (
 	"crypto/md5"
@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-type fileCache struct {
+type FileCache struct {
 	data      map[string]fileCacheData
 	directory string
 }
@@ -23,8 +23,8 @@ type fileCacheData struct {
 }
 
 // Returns a filecached with files scanned
-func createFileCache(directory string) (*fileCache, error) {
-	fc := fileCache{directory: directory, data: map[string]fileCacheData{}}
+func CreateFileCache(directory string) (*FileCache, error) {
+	fc := FileCache{directory: directory, data: map[string]fileCacheData{}}
 
 	c, err := os.ReadDir(directory)
 	if err != nil {
