@@ -12,12 +12,12 @@ func TestMsgMatchRoundTrip(t *testing.T) {
 	
 	// Convert to bytes buffer
 	actualMsgStream := expectedMsg.AsBytesBuf()
-	assert.Equal(t, actualMsgStream, expectedMsgStream, "they should be equal")
+	assert.Equal(t, expectedMsgStream, actualMsgStream, "they should be equal")
 
 	// Convert back to Message
 	actualMsg, err := ParseMessage(actualMsgStream)
-	assert.Equal(t, err, nil, "Should not error")
-	assert.Equal(t, actualMsg, expectedMsg, "they should be equal")
+	assert.Equal(t, nil, err, "Should not error")
+	assert.Equal(t, expectedMsg, actualMsg, "they should be equal")
 	
 	
 }
@@ -28,12 +28,12 @@ func TestMsgParserCheck(t *testing.T) {
 
 	// Convert to bytes buffer
 	actualMsgStream := expectedMsg.AsBytesBuf()
-	assert.Equal(t, actualMsgStream, expectedMsgStream, "they should be equal")
+	assert.Equal(t, expectedMsgStream, actualMsgStream, "they should be equal")
 
 	// Convert back to Message
 	actualMsg, err := ParseMessage(actualMsgStream)
-	assert.Equal(t, err, nil, "Should not error")
-	assert.Equal(t, actualMsg, expectedMsg, "they should be equal")
+	assert.Equal(t, nil, err, "Should not error")
+	assert.Equal(t, expectedMsg, actualMsg, "they should be equal")
 }
 
 func TestMsgParserData(t *testing.T) {
@@ -42,10 +42,10 @@ func TestMsgParserData(t *testing.T) {
 
 	// Convert to bytes buffer
 	actualMsgStream := expectedMsg.AsBytesBuf()
-	assert.Equal(t, actualMsgStream, expectedMsgStream, "they should be equal")
+	assert.Equal(t, expectedMsgStream, actualMsgStream, "they should be equal")
 
 	// Convert back to Message
 	actualMsg, err := ParseMessage(actualMsgStream)
-	assert.Equal(t, err, nil, "Should not error")
-	assert.Equal(t, actualMsg, expectedMsg, "they should be equal")
+	assert.Equal(t, nil, err, "Should not error")
+	assert.Equal(t, expectedMsg, actualMsg, "they should be equal")
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"log/slog"
 )
 
 func CreateTcpConnection(port string, listener bool) (net.Conn, error) {
@@ -45,15 +46,15 @@ func CreateTcpConnection(port string, listener bool) (net.Conn, error) {
 			}
 
 			// Retry connection
-			fmt.Println("Retrying...")
+			slog.Info("Retrying...")
 			time.Sleep(time.Second)
 		}
 	}
 
 	if listener {
-		fmt.Printf("TCP Listening on %s babs!\n", port)
+		slog.Info("TCP Listening babs!", "port", port)
 	} else {
-		fmt.Printf("TCP Sending on %s babs!\n", port)
+		slog.Info("TCP Sending babs!", "port", port)
 	}
 	return conn, nil
 }
