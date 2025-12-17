@@ -2,12 +2,12 @@ package filesyncer
 
 import (
 	"fmt"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/sync/errgroup"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
-	"github.com/stretchr/testify/assert"
-	"golang.org/x/sync/errgroup"
 )
 
 // Tests communications between Main and Replica works as expected
@@ -49,7 +49,7 @@ func TestSyncerEndToEnd(t *testing.T) {
 	replicaFC, err := CreateFileCache(replicaDir)
 	assert.Equal(t, nil, err, "Failed to create replica file cache")
 	replicaSyncer := Syncer{Replica: true, Conn: replicaConn, FileCache: replicaFC}
-	
+
 	g := new(errgroup.Group)
 	g.Go(func() error {
 		err := replicaSyncer.RunAsReplica()
@@ -66,7 +66,7 @@ func TestSyncerEndToEnd(t *testing.T) {
 	// TODO: Assert folders match
 	replicaFcPostSync, err := CreateFileCache(replicaDir)
 	assert.Equal(t, nil, err, "Failed to create replica file cache after sync")
-	
+
 	mainFileCount := 0
 	for k, v := range mainFC.data {
 		replicaFileData, ok := replicaFcPostSync.data[k]

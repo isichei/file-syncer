@@ -1,4 +1,4 @@
-package filesyncer 
+package filesyncer
 
 import (
 	"bytes"
@@ -54,7 +54,6 @@ func (msg *Message) AsBytesBuf() []byte {
 		buf = fmt.Appendf(buf, "%c:%s,", msg.Type, msg.FileName)
 		buf = append(buf, msg.Data...)
 
-		
 	case MsgTypeUndefined:
 		// Leaving this panic here like an assert
 		panic("Got undefined Msg type when trying to create msg buf. This shouldn't happen.")
@@ -93,10 +92,10 @@ func ParseMessage(msgStream []byte) (Message, error) {
 		msg.Data = append(msg.Data, split[1][:len(split[1])-1]...)
 
 	case MsgTypeAuthOK:
-		msg.Type = MsgTypeAuthOK 
+		msg.Type = MsgTypeAuthOK
 
 	case MsgTypeAuthFail:
-		msg.Type = MsgTypeAuthFail 
+		msg.Type = MsgTypeAuthFail
 
 	case MsgTypeCheck:
 		msg.Type = MsgTypeCheck
