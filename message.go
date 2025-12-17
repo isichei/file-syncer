@@ -14,6 +14,9 @@ const (
 	MsgTypeData      MsgType = 'D'
 	MsgTypeFinish    MsgType = 'F'
 	MsgTypeUndefined MsgType = 'U'
+	MsgTypeAuth      MsgType = 'A'
+	MsgTypeAuthOK    MsgType = 'O'
+	MsgTypeAuthFail  MsgType = 'X'
 )
 
 // Phat struct
