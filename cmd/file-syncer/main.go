@@ -2,11 +2,13 @@ package main
 
 import (
 	"flag"
-	"github.com/isichei/file-syncer"
-	"golang.org/x/sync/errgroup"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
+
+	"github.com/isichei/file-syncer"
+	"golang.org/x/sync/errgroup"
 )
 
 type CmdArgs struct {
@@ -32,6 +34,14 @@ func (c *CmdArgs) Register() {
 func main() {
 	cmdArgs := CmdArgs{}
 	cmdArgs.Register()
+
+	// Get API key from environment
+	apiKey := os.Getenv("FILE_SYNCER_API_KEY")
+	if apiKey == "" {
+		slog.Error("FILE_SYNCER_API_KEY environment variable is required")
+		os.Exit(1)
+	}
+
 	var conn net.Conn
 	var fc *filesyncer.FileCache
 
@@ -40,7 +50,7 @@ func main() {
 	// Set off TCP Connection
 	g.Go(func() error {
 		var err error
-		conn, err = filesyncer.CreateTcpConnection(cmdArgs.port, cmdArgs.replica)
+		conn, err = filesyncer.CreateTcpConnection(cmdArgs.port, apiKey, cmdArgs.replica)
 		return err
 	})
 
@@ -57,17 +67,16 @@ func main() {
 	}
 
 	syncer := filesyncer.Syncer{Replica: cmdArgs.replica, Conn: conn, FileCache: fc}
-	if cmdArgs.replica {
-		slog.Info("Running sender as Replica", "port", cmdArgs.port)
-		if err := syncer.RunAsReplica(); err != nil {
-			slog.Error("RunAsReplica failed", "error", err)
-			os.Exit(1)
-		}
+	var syncerName string
+	if syncer.Replica {
+		syncerName = "Replica"
 	} else {
-		slog.Info("Running sender as Main", "port", cmdArgs.port)
-		if err := syncer.RunAsMain(); err != nil {
-			slog.Error("RunAsMain failed", "error", err)
-			os.Exit(1)
-		}
+		syncerName = "Main"
+	}
+
+	slog.Info(fmt.Sprintf("Running sender as %s", syncerName), "port", cmdArgs.port)
+	if err := syncer.Run(); err != nil {
+		slog.Error(fmt.Sprintf("%s failed", syncerName),  "error", err)
+		os.Exit(1)
 	}
 }

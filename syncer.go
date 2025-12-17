@@ -40,6 +40,13 @@ func (s *Syncer) SendFinish() error {
 	return nil
 }
 
+func (s *Syncer) Run() error {
+	if s.Replica {
+		return s.RunAsReplica()
+	} else {
+		return s.RunAsMain()
+	}
+}
 func (s *Syncer) RunAsMain() error {
 	defer s.Conn.Close()
 	reader := bufio.NewReader(s.Conn)
