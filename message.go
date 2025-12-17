@@ -32,11 +32,15 @@ func (msg *Message) AsBytesBuf() []byte {
 	buf := []byte{}
 
 	switch msg.Type {
-	case MsgTypeFinish:
-		buf = fmt.Appendf(buf, "%c:,\x00", msg.Type)
+	case MsgTypeFinish, MsgTypeAuthOK, MsgTypeAuthFail:
+		buf = fmt.Appendf(buf, "%c:,", msg.Type)
+
+	case MsgTypeAuth:
+		buf = fmt.Appendf(buf, "%c:,", msg.Type)
+		buf = append(buf, msg.Data...)
 
 	case MsgTypeCheck:
-		buf = fmt.Appendf(buf, "%c:%s,%s\x00", msg.Type, msg.FileName, msg.MD5)
+		buf = fmt.Appendf(buf, "%c:%s,%s", msg.Type, msg.FileName, msg.MD5)
 
 	case MsgTypeMatch:
 		matchValue := 0
@@ -44,17 +48,21 @@ func (msg *Message) AsBytesBuf() []byte {
 			matchValue = 1
 		}
 
-		buf = fmt.Appendf(buf, "%c:%s,%d\x00", msg.Type, msg.FileName, matchValue)
+		buf = fmt.Appendf(buf, "%c:%s,%d", msg.Type, msg.FileName, matchValue)
 
 	case MsgTypeData:
 		buf = fmt.Appendf(buf, "%c:%s,", msg.Type, msg.FileName)
 		buf = append(buf, msg.Data...)
-		buf = append(buf, '\x00')
 
+		
 	case MsgTypeUndefined:
 		// Leaving this panic here like an assert
 		panic("Got undefined Msg type when trying to create msg buf. This shouldn't happen.")
 	}
+
+	// end message
+	buf = append(buf, '\x00')
+
 	return buf
 }
 
@@ -79,6 +87,16 @@ func ParseMessage(msgStream []byte) (Message, error) {
 	switch MsgType(msgStream[0]) {
 	case MsgTypeFinish:
 		msg.Type = MsgTypeFinish
+
+	case MsgTypeAuth:
+		msg.Type = MsgTypeAuth
+		msg.Data = append(msg.Data, split[1][:len(split[1])-1]...)
+
+	case MsgTypeAuthOK:
+		msg.Type = MsgTypeAuthOK 
+
+	case MsgTypeAuthFail:
+		msg.Type = MsgTypeAuthFail 
 
 	case MsgTypeCheck:
 		msg.Type = MsgTypeCheck
