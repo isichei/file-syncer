@@ -13,22 +13,22 @@ import (
 
 type CmdArgs struct {
 	replica   bool
-	port      string
+	addr      string
 	directory string
 	debug     bool
 }
 
 func (c *CmdArgs) Register() {
 	flag.BoolVar(&c.replica, "replica", false, "If this is the main filesystem or replica")
-	flag.StringVar(&c.port, "port", "8080", "What port should the tcp connection be on")
+	flag.StringVar(&c.addr, "addr", ":8080", "What address should the tcp connection be on")
 	flag.StringVar(&c.directory, "directory", "test_data", "Path to the dir to sync the files to")
 	flag.BoolVar(&c.debug, "debug", false, "Enable debug logging")
 	flag.Parse()
-
+	
 	if c.debug {
 		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	}
-	slog.Debug("CmdArgs.Register", "replica", c.replica, "port", c.port, "directory", c.directory)
+	slog.Debug("CmdArgs.Register", "replica", c.replica, "addr", c.addr, "directory", c.directory)
 }
 
 func main() {
@@ -50,7 +50,7 @@ func main() {
 	// Set off TCP Connection
 	g.Go(func() error {
 		var err error
-		conn, err = filesyncer.CreateTcpConnection(cmdArgs.port, apiKey, cmdArgs.replica)
+		conn, err = filesyncer.CreateTcpConnection(cmdArgs.addr, apiKey, cmdArgs.replica)
 		return err
 	})
 
@@ -74,7 +74,7 @@ func main() {
 		syncerName = "Main"
 	}
 
-	slog.Info(fmt.Sprintf("Running sender as %s", syncerName), "port", cmdArgs.port)
+	slog.Info(fmt.Sprintf("Running sender as %s", syncerName), "addr", cmdArgs.addr)
 	if err := syncer.Run(); err != nil {
 		slog.Error(fmt.Sprintf("%s failed", syncerName),  "error", err)
 		os.Exit(1)

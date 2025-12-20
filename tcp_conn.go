@@ -7,39 +7,33 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"strings"
 	"syscall"
 	"time"
 )
 
 var ErrAuthFailed = errors.New("Authentication failed")
 
-func CreateTcpConnection(port string, apiKey string, replica bool) (net.Conn, error) {
+func CreateTcpConnection(address string, apiKey string, replica bool) (net.Conn, error) {
 	if replica {
-		return CreateReplicaListenerConn(port, apiKey)
+		return CreateReplicaListenerConn(address, apiKey)
 	}
-	return CreateMainSenderConn(port, apiKey)
+	return CreateMainSenderConn(address, apiKey)
 }
 
 // CreateMainSenderConn dials the replica, sends auth, and waits for acceptance
-func CreateMainSenderConn(port string, apiKey string) (net.Conn, error) {
-	if !strings.HasPrefix(port, ":") {
-		port = ":" + port
-	}
-
+func CreateMainSenderConn(address string, apiKey string) (net.Conn, error) {
 	var conn net.Conn
 	var err error
 
 	// Retry connection logic
 	for retry := range 4 {
-		conn, err = net.Dial("tcp", port)
-
+		conn, err = net.Dial("tcp", address)
 		if err == nil {
 			break
 		}
 
 		if !errors.Is(err, syscall.ECONNREFUSED) {
-			return nil, fmt.Errorf("failed to dial %s: %w", port, err)
+			return nil, fmt.Errorf("failed to dial %s: %w", address, err)
 		}
 
 		if retry == 3 {
@@ -77,24 +71,20 @@ func CreateMainSenderConn(port string, apiKey string) (net.Conn, error) {
 		return nil, ErrAuthFailed
 	}
 
-	slog.Info("TCP connection authenticated", "port", port)
+	slog.Info("TCP connection authenticated", "address", address)
 	return conn, nil
 }
 
-// CreateReplicaListenerConn listens on port, accepts connections in a loop,
+// CreateReplicaListenerConn listens on address, accepts connections in a loop,
 // and returns the first connection that authenticates successfully
-func CreateReplicaListenerConn(port string, validAPIKey string) (net.Conn, error) {
-	if !strings.HasPrefix(port, ":") {
-		port = ":" + port
-	}
-
-	ln, err := net.Listen("tcp", port)
+func CreateReplicaListenerConn(address string, validAPIKey string) (net.Conn, error) {
+	ln, err := net.Listen("tcp", address)
 	if err != nil {
-		return nil, fmt.Errorf("failed to listen on %s: %w", port, err)
+		return nil, fmt.Errorf("failed to listen on %s: %w", address, err)
 	}
 	defer ln.Close()
 
-	slog.Info("TCP Listening for authenticated connection", "port", port)
+	slog.Info("TCP Listening for authenticated connection", "address", address)
 
 	AcceptConnErrCounter := 0
 	for {
