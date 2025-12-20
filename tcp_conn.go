@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-var ErrAuthFailed = errors.New("authentication failed")
+var ErrAuthFailed = errors.New("Authentication failed")
 
 func CreateTcpConnection(port string, apiKey string, replica bool) (net.Conn, error) {
 	if replica {
@@ -107,55 +107,60 @@ func CreateReplicaListenerConn(port string, validAPIKey string) (net.Conn, error
 			AcceptConnErrCounter += 1
 			continue
 		}
-		// Set 5 second deadline for auth
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-		reader := bufio.NewReader(conn)
-		msgStream, err := reader.ReadBytes('\x00')
+		conn, err = AuthenticateListenerConnection(conn, validAPIKey)
 		if err != nil {
-			slog.Warn("Failed to read auth message", "remote", conn.RemoteAddr(), "error", err)
-			conn.Close()
-			continue
+			return nil, err
 		}
-
-		msg, err := ParseMessage(msgStream)
-		if err != nil {
-			slog.Warn("Failed to parse auth message", "remote", conn.RemoteAddr(), "error", err)
-			sendAuthFail(conn)
-			conn.Close()
-			continue
-		}
-
-		if msg.Type != MsgTypeAuth {
-			slog.Warn("Expected auth message", "remote", conn.RemoteAddr(), "got", string(msg.Type))
-			sendAuthFail(conn)
-			conn.Close()
-			continue
-		}
-
-		// Check auth
-		if subtle.ConstantTimeCompare(msg.Data, []byte(validAPIKey)) != 1 {
-			slog.Warn("Auth failed: invalid API key", "remote", conn.RemoteAddr())
-			sendAuthFail(conn)
-			conn.Close()
-			continue
-		}
-
-		// Clear deadline for normal operation
-		conn.SetReadDeadline(time.Time{})
-
-		// Send success
-		authOK := Message{Type: MsgTypeAuthOK}
-		_, err = conn.Write(authOK.AsBytesBuf())
-		if err != nil {
-			slog.Warn("Failed to send auth OK", "remote", conn.RemoteAddr(), "error", err)
-			conn.Close()
-			continue
-		}
-
-		slog.Info("Client authenticated", "remote", conn.RemoteAddr())
 		return conn, nil
 	}
+}
+
+// To be used if you want to create a listener and manage the the connection creation
+// yourself but then still want to authenticate it.
+func AuthenticateListenerConnection(conn net.Conn, validAPIKey string) (net.Conn, error) {
+	// Set 5 second deadline for auth
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	reader := bufio.NewReader(conn)
+	msgStream, err := reader.ReadBytes('\x00')
+	if err != nil {
+		slog.Warn("Failed to read auth message", "remote", conn.RemoteAddr(), "error", err)
+		return conn, errors.Join(ErrAuthFailed, errors.New("Failed to read auth message"))
+	}
+
+	msg, err := ParseMessage(msgStream)
+	if err != nil {
+		slog.Warn("Failed to parse auth message", "remote", conn.RemoteAddr(), "error", err)
+		sendAuthFail(conn)
+		return conn, errors.Join(ErrAuthFailed, errors.New("Failed to parse auth message"))
+	}
+
+	if msg.Type != MsgTypeAuth {
+		slog.Warn("Expected auth message", "remote", conn.RemoteAddr(), "got", string(msg.Type))
+		sendAuthFail(conn)
+		return conn, errors.Join(ErrAuthFailed, errors.New("Recieved non auth message type"))
+	}
+
+	// Check auth
+	if subtle.ConstantTimeCompare(msg.Data, []byte(validAPIKey)) != 1 {
+		slog.Warn("Auth failed: invalid API key", "remote", conn.RemoteAddr())
+		sendAuthFail(conn)
+		return conn, errors.Join(ErrAuthFailed, errors.New("Recieved non auth message type"))
+	}
+
+	// Clear deadline for normal operation
+	conn.SetReadDeadline(time.Time{})
+
+	// Send success
+	authOK := Message{Type: MsgTypeAuthOK}
+	_, err = conn.Write(authOK.AsBytesBuf())
+	if err != nil {
+		slog.Warn("Failed to send auth OK", "remote", conn.RemoteAddr(), "error", err)
+		return conn, errors.Join(ErrAuthFailed, errors.New("Failed to send auth OK message"))
+	}
+
+	slog.Info("Client authenticated", "remote", conn.RemoteAddr())
+	return conn, nil
 }
 
 func sendAuthFail(conn net.Conn) {
