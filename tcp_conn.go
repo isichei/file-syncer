@@ -102,6 +102,7 @@ func CreateReplicaListenerConn(port string, validAPIKey string) (net.Conn, error
 		if err != nil {
 			slog.Warn("Failed to accept connection", "error", err)
 			if AcceptConnErrCounter >= 5 {
+				conn.Close()
 				return nil, err
 			}
 			AcceptConnErrCounter += 1
@@ -109,6 +110,7 @@ func CreateReplicaListenerConn(port string, validAPIKey string) (net.Conn, error
 		}
 		conn, err = AuthenticateListenerConnection(conn, validAPIKey)
 		if err != nil {
+			conn.Close()
 			return nil, err
 		}
 		return conn, nil
