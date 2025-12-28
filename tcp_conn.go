@@ -3,6 +3,7 @@ package filesyncer
 import (
 	"bufio"
 	"crypto/subtle"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,17 +18,21 @@ func CreateTcpConnection(address string, apiKey string, replica bool) (net.Conn,
 	if replica {
 		return CreateReplicaListenerConn(address, apiKey)
 	}
-	return CreateMainSenderConn(address, apiKey)
+	return CreateMainSenderConn(address, apiKey, false)
 }
 
 // CreateMainSenderConn dials the replica, sends auth, and waits for acceptance
-func CreateMainSenderConn(address string, apiKey string) (net.Conn, error) {
+func CreateMainSenderConn(address string, apiKey string, tlsConn bool) (net.Conn, error) {
 	var conn net.Conn
 	var err error
 
 	// Retry connection logic
 	for retry := range 4 {
-		conn, err = net.Dial("tcp", address)
+		if tlsConn {
+			conn, err = tls.Dial("tcp", address, nil)
+		} else {
+			conn, err = net.Dial("tcp", address)
+		}
 		if err == nil {
 			break
 		}
